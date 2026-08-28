@@ -1,0 +1,37 @@
+DATA LICENSE — Open Database License (ODbL) v1.0
+================================================
+
+This file governs the DATA produced by this project — the built routing graph
+`*.pedestrian.routerdb` and any OSM-derived artifacts published as GitHub
+Releases. It does NOT govern the source code (see LICENSE for the code license).
+
+Source data
+-----------
+The routing graph is a Derivative Database built from OpenStreetMap data
+obtained via Geofabrik (https://download.geofabrik.de/):
+
+    © OpenStreetMap contributors — https://www.openstreetmap.org/copyright
+
+License
+-------
+The produced database is made available under the Open Database License (ODbL)
+v1.0. Any rights in individual contents of the database are licensed under the
+Database Contents License (DbCL) v1.0.
+
+    ODbL 1.0 : https://opendatacommons.org/licenses/odbl/1-0/
+    DbCL 1.0 : https://opendatacommons.org/licenses/dbcl/1-0/
+
+The full, verbatim text of the ODbL 1.0 is incorporated here by reference from
+the canonical URL above. (Maintainers: vendor the official plain-text of ODbL
+1.0 into this file for a fully self-contained distribution.)
+
+Your obligations when redistributing this data (or a derivative)
+----------------------------------------------------------------
+1. ATTRIBUTION — keep the notice "© OpenStreetMap contributors" and this ODbL
+   reference with any public use or redistribution.
+2. SHARE-ALIKE — if you publicly use a modified/derived version of this
+   database, you must offer that derivative database under ODbL 1.0.
+3. KEEP-OPEN — you may not use technical measures (e.g. DRM) to restrict others
+   from the rights this license grants.
+
+See LICENSE (code) and NOTICE (attributions) in this repository.

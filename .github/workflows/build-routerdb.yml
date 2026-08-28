@@ -1,0 +1,170 @@
+# ArcFlow.OsmRoutes — daily Switzerland pedestrian RouterDb build + publish.
+#
+# Auth: uses the built-in GITHUB_TOKEN (no PAT/secret needed). The permissions
+# block below grants it write access to Contents so `gh release` can publish —
+# this works even if the repo's default workflow permissions are read-only.
+
+name: build-routerdb
+
+on:
+  schedule:
+    # Geofabrik cuts the daily CH extract ~20:00-21:00 UTC, then builds the .pbf
+    # overnight. We target ~05:00 Bern time. GitHub cron is UTC with no DST, so
+    # 05:00 Bern = 03:00 UTC in summer (CEST) and 04:00 UTC in winter (CET). Both
+    # lines fire every day, so the off-season one is a ~free md5-skip no-op that
+    # also doubles as a resilience retry (catches late publishes / dropped runs).
+    # Minutes are a few past the hour so GitHub doesn't drop/delay the job at :00.
+    - cron: '7 3 * * *'       # 03:07 UTC = 05:07 Bern during CEST (summer)
+    - cron: '7 4 * * *'       # 04:07 UTC = 05:07 Bern during CET  (winter)
+  workflow_dispatch:          # manual run button
+    inputs:
+      force:
+        description: 'Force rebuild + publish even if source pbf and profile-version are unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write             # required for gh release create / delete
+
+concurrency:
+  group: build-routerdb
+  cancel-in-progress: false
+
+env:
+  PBF_URL: https://download.geofabrik.de/europe/switzerland-latest.osm.pbf
+  ROUTERDB: switzerland.pedestrian.routerdb
+  # Bump this whenever the routing PROFILE changes (e.g. pedestrian.private.lua) so the
+  # md5-skip republishes even when the OSM source is unchanged. Recorded in the release body.
+  PROFILE_VERSION: foot-private-1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # md5-skip: skip build + publish only when BOTH the Geofabrik pbf md5 AND the
+      # profile-version match the rolling `latest` release (a profile change must
+      # republish even if the OSM source is unchanged). `force` overrides everything.
+      - name: Check for changes (md5-skip)
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          remote_md5=$(curl -fsSL "${PBF_URL}.md5" | awk '{print $1}')
+          echo "remote pbf md5: $remote_md5"
+          echo "current profile-version: $PROFILE_VERSION"
+
+          release_exists=false
+          last_md5=""
+          last_profile=""
+          if gh release view latest >/dev/null 2>&1; then
+            release_exists=true
+            body=$(gh release view latest --json body -q .body)
+            last_md5=$(echo "$body" | grep -oiE 'pbf-md5: *[0-9a-f]{32}' | awk '{print $2}' || true)
+            last_profile=$(echo "$body" | grep -oiE 'profile-version: *[^ ]+' | awk '{print $2}' || true)
+          fi
+          echo "last built pbf md5: ${last_md5:-<none>}"
+          echo "last built profile-version: ${last_profile:-<none>}"
+
+          # Decide, and record WHY — so a no-publish day is unambiguous in the run summary.
+          if [ "${FORCE:-false}" = "true" ]; then
+            skip=false
+            reason="building — forced (workflow_dispatch force=true)."
+            echo "pbf_md5=$remote_md5" >> "$GITHUB_OUTPUT"
+          elif [ "$release_exists" = "true" ] && [ -n "$last_md5" ] && [ "$remote_md5" = "$last_md5" ] \
+               && [ "$last_profile" = "$PROFILE_VERSION" ]; then
+            skip=true
+            reason="source + profile unchanged — pbf md5 (\`$remote_md5\`) and profile-version (\`$PROFILE_VERSION\`) match 'latest'."
+          else
+            skip=false
+            if [ "$release_exists" != "true" ]; then
+              reason="building — no 'latest' release yet (first build)."
+            elif [ -z "$last_md5" ]; then
+              reason="building — 'latest' release carries no pbf-md5 marker to compare against."
+            elif [ "$remote_md5" != "$last_md5" ]; then
+              reason="building — Geofabrik pbf md5 changed (source \`$remote_md5\` != release \`$last_md5\`)."
+            else
+              reason="building — profile-version changed (current \`$PROFILE_VERSION\` != release \`${last_profile:-<none>}\`)."
+            fi
+            echo "pbf_md5=$remote_md5" >> "$GITHUB_OUTPUT"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "decision: skip=$skip — $reason"
+
+          # Unambiguous reason in the Actions run summary (visible without opening logs).
+          {
+            echo "### md5-skip decision"
+            echo ""
+            if [ "$skip" = "true" ]; then
+              echo "- **Result:** skipped — no build, no new release."
+            else
+              echo "- **Result:** building + publishing."
+            fi
+            echo "- **Reason:** $reason"
+            echo "- Source (Geofabrik) md5: \`$remote_md5\`"
+            echo "- Latest release md5: \`${last_md5:-<none>}\`"
+            echo "- Profile-version: current \`$PROFILE_VERSION\`, latest \`${last_profile:-<none>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build routerdb
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          dotnet run -c Release --project . \
+            -- --pbf-url "$PBF_URL" --routerdb "$ROUTERDB" --contract true --foot-private true
+          ls -lh "$ROUTERDB" "$ROUTERDB.md5"
+
+      - name: Publish release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PBF_MD5: ${{ steps.check.outputs.pbf_md5 }}
+        run: |
+          set -euo pipefail
+          date_tag=$(date -u +%Y%m%d)
+          itinero_ver=$(grep -oiE 'Itinero" Version="[0-9.]+"' \
+            ArcFlow.OsmRoutes.csproj | head -1 | grep -oE '[0-9.]+')
+          notes="Source: Geofabrik switzerland-latest ($date_tag).
+          © OpenStreetMap contributors, ODbL 1.0.
+          Built with Itinero ${itinero_ver:-1.5.1} (deserialize with the same Itinero major version).
+          Pedestrian profile: custom '${PROFILE_VERSION}' — foot=private treated as walkable
+          (see pedestrian.private.lua); consumers should route with the matching profile.
+          pbf-md5: ${PBF_MD5}
+          profile-version: ${PROFILE_VERSION}"
+
+          # Dated immutable release
+          gh release create "ch-pedestrian-$date_tag" "$ROUTERDB" "$ROUTERDB.md5" \
+            --title "CH pedestrian routerdb $date_tag" --notes "$notes" || \
+          gh release upload "ch-pedestrian-$date_tag" "$ROUTERDB" "$ROUTERDB.md5" --clobber
+
+          # Rolling `latest`
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest "$ROUTERDB" "$ROUTERDB.md5" \
+            --title "CH pedestrian routerdb (latest)" --notes "$notes" --latest
+
+      # Retention: keep dated releases for N days.
+      - name: Prune old releases
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_DAYS: '30'
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${KEEP_DAYS} days" +%Y%m%d)
+          gh release list --limit 200 --json tagName -q '.[].tagName' \
+            | grep -E '^ch-pedestrian-[0-9]{8}$' \
+            | while read -r tag; do
+                d=${tag#ch-pedestrian-}
+                if [ "$d" -lt "$cutoff" ]; then
+                  echo "pruning $tag"
+                  gh release delete "$tag" -y --cleanup-tag || true
+                fi
+              done

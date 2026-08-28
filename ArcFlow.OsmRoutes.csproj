@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ArcFlow.OsmRoutes — standalone OSM pedestrian RouterDb builder.
+    SDK-style, net8.0, C# 10. Deliberately NOT added to the net48
+    ArcFlow.Zisoft_3.0.sln (don't mix SDK + Framework MSBuild).
+
+    Itinero 1.5.1 is netstandard2.0, so it references cleanly from net8;
+    its old transitive deps (protobuf-net 2.3.7, OsmSharp 6.2, Reminiscence)
+    must be validated at RUNTIME, not just compile — see the plan's spike.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>10</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>ArcFlow.OsmRoutes</RootNamespace>
+    <AssemblyName>ArcFlow.OsmRoutes</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Itinero" Version="1.5.1" />
+    <PackageReference Include="Itinero.IO.Osm" Version="1.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Custom pedestrian profile (foot=private walkable). Copied next to the exe and
+         loaded at runtime via DynamicVehicle.Load. Also linked into ArcFlow.Tool.RouteCache
+         so the builder and the consumer share one canonical profile. -->
+    <Content Include="pedestrian.private.lua">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
